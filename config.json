@@ -1,0 +1,13 @@
+{
+ "CONTENT_DIR": "content",
+ "DEBUG": true,
+ "DEFAULT_SEARCH_IGNORE_CASE": true,
+ "SECRET_KEY": "XVWERASDFASDFASsadf lksadfowa@24j36a",
+ "USERS": {
+  "admin": "$2a$12$zzDbFJKbv3fmsMsh7dKuWehsK/bEHvoo/t32WXUhVSAbfifIs6YOW", 
+  "sam": "$2a$12$761rykFi1evGChc2A35omuFpNfQw01VoKXaNHLpEWSkLm7LLwHJBG", 
+  "jeff": "$2a$12$itncIKNBRcC/UpDrVs5FIOo8ljzfiploL8splg9bZrH/FEGTgwwhC"
+ }, 
+ "TITLE": "Wiki"
+
+}

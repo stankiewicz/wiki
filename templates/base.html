@@ -25,13 +25,6 @@
 								<li></li>
 							</ul>
 
-							<ul class="nav pull-right">
-								{% if current_user.is_anonymous() %}
-									<li><a href="{{ url_for('user_login') }}">Login</a></li>
-								{% else %}
-									<li><a href="{{ url_for('user_logout') }}">Logout</a></li>
-								{% endif %}
-							</ul>
 						</div>
 					</div>
 				</div>

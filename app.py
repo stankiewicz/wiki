@@ -1,55 +1,97 @@
-import binascii
 import hashlib
-import os
-import re
-import markdown
 import json
 import string
 from functools import wraps
-from flask import (Flask, render_template, flash, redirect, url_for, request,
+
+import os
+import re
+import markdown
+import bcrypt  # sudo apt-get install libffi-dev
+from flask import (Flask, render_template, flash, redirect, url_for, request, Response,
                    abort)
 from flask.ext.wtf import Form
-from wtforms import (BooleanField, TextField, TextAreaField, PasswordField)
+from wtforms import (BooleanField, TextField, TextAreaField)
 from wtforms.validators import (InputRequired, ValidationError)
-from flask.ext.login import (LoginManager, login_required, current_user,
-                             login_user, logout_user)
 from flask.ext.script import Manager
 
 
-"""
-    Application Setup
-    ~~~~~~~~~
-"""
+CONF_FILE = 'config.json'
+password_cache = []
 
 app = Flask(__name__)
-app.config['CONTENT_DIR'] = 'content'
-app.config['TITLE'] = 'wiki'
-try:
-    app.config.from_pyfile(
-        os.path.join(app.config.get('CONTENT_DIR'), 'config.py')
-    )
-except IOError:
-    print ("Startup Failure: You need to place a "
-           "config.py in your content directory.")
 
-#app.debug = True
+
+def load_config():
+    config = {}
+    try:
+        save_flag = False
+        with open(CONF_FILE, 'r') as f:
+            config = json.loads(f.read())
+        # Verify passwords are hashed, re-save config w/ hashed PWs if not
+        for user, password in config.get('USERS', {}).iteritems():
+            user = str(user)
+            password = str(password)
+            if password[:7] != "$2a$12$":
+                save_flag = True
+                config['USERS'][user] = bcrypt.hashpw(str(password), bcrypt.gensalt())
+            if user != user.lower():  # Make username lowercase if not already
+                save_flag = True
+                config['USERS'][user.lower()] = config['USERS'].pop(user)
+
+        if save_flag:
+            print('Updating config file...')
+            with open(CONF_FILE, 'w') as f:
+                f.write(json.dumps(config, indent=True))
+    except Exception as e:
+        print(str(e) + '\n\n Error loading ' + CONF_FILE + '! \n\n')
+
+    return config
+
+
+app.config.update(load_config())
+app.debug = app.config.get('DEBUG', False)
 manager = Manager(app)
 
-loginmanager = LoginManager()
-loginmanager.init_app(app)
-loginmanager.login_view = 'user_login'
+
+def check_auth(username, password):
+    try:
+        user = str(username).lower()
+        pwd = str(password)
+        shahash = hashlib.sha1(user + pwd).hexdigest()  # If attacker can read RAM, well game over anyway
+        if shahash in password_cache:
+            return True
+        else:
+            hashed = str(app.config['USERS'].get(user, ''))
+            if bcrypt.hashpw(pwd, hashed) == hashed:
+                password_cache.append(shahash)
+                return True
+    except Exception as e:
+        print e
+        return False
 
 
+def authenticate():
+    return Response(
+        'Could not verify your access level for that URL.\n'
+        'You have to login with proper credentials', 401,
+        {'WWW-Authenticate': 'Basic realm="Login Required"'})
 
-"""
-    Wiki classes
-    ~~~~~~~~~~~~
-"""
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+
+    return decorated
 
 
 class Processors(object):
     """This class is collection of processors for various content items.
     """
+
     def __init__(self, content=""):
         """Initialization function.  Runs Processors().pre() on content.
 
@@ -179,7 +221,7 @@ class Page(object):
         item = self._meta[name]
         if len(item) == 1:
             return item[0]
-        print item
+        print(item)
         return item
 
     def __setitem__(self, name, value):
@@ -254,7 +296,7 @@ class Wiki(object):
         path = self.path(url)
         if not self.exists(url):
             return False
-        print path
+        print(path)
         os.remove(path)
         return True
 
@@ -270,10 +312,10 @@ class Wiki(object):
                     else:
                         url = os.path.join(os.path.join(*path_prefix), name[:-3])
                     pages.append(Page(fullname, url.replace('\\', '/')))
+
         pages = []
         _walk(self.root)
         return sorted(pages, key=lambda x: x.title.lower())
-
 
     def get_tags(self):
         pages = self.index()
@@ -310,153 +352,6 @@ class Wiki(object):
         return matched
 
 
-"""
-    User classes & helpers
-    ~~~~~~~~~~~~~~~~~~~~~~
-"""
-
-
-class UserManager(object):
-    """A very simple user Manager, that saves it's data as json."""
-    def __init__(self, path):
-        self.file = os.path.join(path, 'users.json')
-
-    def read(self):
-        if not os.path.exists(self.file):
-            return {}
-        with open(self.file) as f:
-            data = json.loads(f.read())
-        return data
-
-    def write(self, data):
-        with open(self.file, 'w') as f:
-            f.write(json.dumps(data, indent=2))
-
-    def add_user(self, name, password,
-                 active=True, roles=[], authentication_method=None):
-        users = self.read()
-        if users.get(name):
-            return False
-        if authentication_method is None:
-            authentication_method = get_default_authentication_method()
-        new_user = {
-            'active': active,
-            'roles': roles,
-            'authentication_method': authentication_method,
-            'authenticated': False
-        }
-        # Currently we have only two authentication_methods: cleartext and
-        # hash. If we get more authentication_methods, we will need to go to a
-        # strategy object pattern that operates on User.data.
-        if authentication_method == 'hash':
-            new_user['hash'] = make_salted_hash(password)
-        elif authentication_method == 'cleartext':
-            new_user['password'] = password
-        else:
-            raise NotImplementedError(authentication_method)
-        users[name] = new_user
-        self.write(users)
-        userdata = users.get(name)
-        return User(self, name, userdata)
-
-    def get_user(self, name):
-        users = self.read()
-        userdata = users.get(name)
-        if not userdata:
-            return None
-        return User(self, name, userdata)
-
-    def delete_user(self, name):
-        users = self.read()
-        if not users.pop(name, False):
-            return False
-        self.write(users)
-        return True
-
-    def update(self, name, userdata):
-        data = self.read()
-        data[name] = userdata
-        self.write(data)
-
-
-class User(object):
-    def __init__(self, manager, name, data):
-        self.manager = manager
-        self.name = name
-        self.data = data
-
-    def get(self, option):
-        return self.data.get(option)
-
-    def set(self, option, value):
-        self.data[option] = value
-        self.save()
-
-    def save(self):
-        self.manager.update(self.name, self.data)
-
-    def is_authenticated(self):
-        return self.data.get('authenticated')
-
-    def is_active(self):
-        return self.data.get('active')
-
-    def is_anonymous(self):
-        return False
-
-    def get_id(self):
-        return self.name
-
-    def check_password(self, password):
-        """Return True, return False, or raise NotImplementedError if the
-        authentication_method is missing or unknown."""
-        authentication_method = self.data.get('authentication_method', None)
-        if authentication_method is None:
-            authentication_method = get_default_authentication_method()
-        # See comment in UserManager.add_user about authentication_method.
-        if authentication_method == 'hash':
-            result = check_hashed_password(password, self.get('hash'))
-        elif authentication_method == 'cleartext':
-            result = (self.get('password') == password)
-        else:
-            raise NotImplementedError(authentication_method)
-        return result
-
-
-def get_default_authentication_method():
-    return app.config.get('DEFAULT_AUTHENTICATION_METHOD', 'cleartext')
-
-
-def make_salted_hash(password, salt=None):
-    if not salt:
-        salt = os.urandom(64)
-    d = hashlib.sha512()
-    d.update(salt[:32])
-    d.update(password)
-    d.update(salt[32:])
-    return binascii.hexlify(salt) + d.hexdigest()
-
-
-def check_hashed_password(password, salted_hash):
-    salt = binascii.unhexlify(salted_hash[:128])
-    return make_salted_hash(password, salt) == salted_hash
-
-
-def protect(f):
-    @wraps(f)
-    def wrapper(*args, **kwargs):
-        if app.config.get('PRIVATE') and not current_user.is_authenticated():
-            return loginmanager.unauthorized()
-        return f(*args, **kwargs)
-    return wrapper
-
-
-"""
-    Forms
-    ~~~~~
-"""
-
-
 class URLForm(Form):
     url = TextField('', [InputRequired()])
 
@@ -479,42 +374,11 @@ class EditorForm(Form):
     tags = TextField('')
 
 
-class LoginForm(Form):
-    name = TextField('', [InputRequired()])
-    password = PasswordField('', [InputRequired()])
-
-    def validate_name(form, field):
-        user = users.get_user(field.data)
-        if not user:
-            raise ValidationError('This username does not exist.')
-
-    def validate_password(form, field):
-        user = users.get_user(form.name.data)
-        if not user:
-            return
-        if not user.check_password(field.data):
-            raise ValidationError('Username and password do not match.')
-
-
 wiki = Wiki(app.config.get('CONTENT_DIR'))
-
-users = UserManager(app.config.get('CONTENT_DIR'))
-
-
-@loginmanager.user_loader
-def load_user(name):
-    return users.get_user(name)
-
-
-
-"""
-    Routes
-    ~~~~~~
-"""
 
 
 @app.route('/')
-@protect
+@requires_auth
 def home():
     page = wiki.get('home')
     if page:
@@ -523,21 +387,21 @@ def home():
 
 
 @app.route('/index/')
-@protect
+@requires_auth
 def index():
     pages = wiki.index()
     return render_template('index.html', pages=pages)
 
 
 @app.route('/<path:url>/')
-@protect
+@requires_auth
 def display(url):
     page = wiki.get_or_404(url)
     return render_template('page.html', page=page)
 
 
 @app.route('/create/', methods=['GET', 'POST'])
-@protect
+@requires_auth
 def create():
     form = URLForm()
     if form.validate_on_submit():
@@ -546,7 +410,7 @@ def create():
 
 
 @app.route('/edit/<path:url>/', methods=['GET', 'POST'])
-@protect
+@requires_auth
 def edit(url):
     page = wiki.get(url)
     form = EditorForm(obj=page)
@@ -561,7 +425,7 @@ def edit(url):
 
 
 @app.route('/preview/', methods=['POST'])
-@protect
+@requires_auth
 def preview():
     a = request.form
     data = {}
@@ -571,7 +435,7 @@ def preview():
 
 
 @app.route('/move/<path:url>/', methods=['GET', 'POST'])
-@protect
+@requires_auth
 def move(url):
     page = wiki.get_or_404(url)
     form = URLForm(obj=page)
@@ -583,7 +447,7 @@ def move(url):
 
 
 @app.route('/delete/<path:url>/', methods=['POST'])
-@protect
+@requires_auth
 def delete(url):
     page = wiki.get_or_404(url)
     wiki.delete(url)
@@ -592,21 +456,21 @@ def delete(url):
 
 
 @app.route('/tags/')
-@protect
+@requires_auth
 def tags():
     tags = wiki.get_tags()
     return render_template('tags.html', tags=tags)
 
 
 @app.route('/tag/<string:name>/')
-@protect
+@requires_auth
 def tag(name):
     tagged = wiki.index_by_tag(name)
     return render_template('tag.html', pages=tagged, tag=name)
 
 
 @app.route('/search/', methods=['GET', 'POST'])
-@protect
+@requires_auth
 def search():
     form = SearchForm()
     if form.validate_on_submit():
@@ -614,53 +478,6 @@ def search():
         return render_template('search.html', form=form,
                                results=results, search=form.term.data)
     return render_template('search.html', form=form, search=None)
-
-
-@app.route('/user/login/', methods=['GET', 'POST'])
-def user_login():
-    form = LoginForm()
-    if form.validate_on_submit():
-        user = users.get_user(form.name.data)
-        login_user(user)
-        user.set('authenticated', True)
-        flash('Login successful.', 'success')
-        return redirect(request.args.get("next") or url_for('index'))
-    return render_template('login.html', form=form)
-
-
-@app.route('/user/logout/')
-@login_required
-def user_logout():
-    current_user.set('authenticated', False)
-    logout_user()
-    flash('Logout successful.', 'success')
-    return redirect(url_for('index'))
-
-
-@app.route('/user/')
-def user_index():
-    pass
-
-
-@app.route('/user/create/')
-def user_create():
-    pass
-
-
-@app.route('/user/<int:user_id>/')
-def user_admin(user_id):
-    pass
-
-
-@app.route('/user/delete/<int:user_id>/')
-def user_delete(user_id):
-    pass
-
-
-"""
-    Error Handlers
-    ~~~~~~~~~~~~~~
-"""
 
 
 @app.errorhandler(404)
