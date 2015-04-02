@@ -70,39 +70,20 @@ def check_auth(username, password):
         return False
 
 
-def authenticate():
-    return Response(
-        'Could not verify your access level for that URL.\n'
-        'You have to login with proper credentials', 401,
-        {'WWW-Authenticate': 'Basic realm="Login Required"'})
-
-
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         auth = request.authorization
         if not auth or not check_auth(auth.username, auth.password):
-            return authenticate()
+            return Response('Please log in.', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
         return f(*args, **kwargs)
 
     return decorated
 
 
 class Processors(object):
-    """This class is collection of processors for various content items.
-    """
-
     def __init__(self, content=""):
-        """Initialization function.  Runs Processors().pre() on content.
-
-        Args:
-            None
-
-        Kwargs:
-            content (str): Preprocessed content directly from the file or
-            textarea.
-        """
-        self.content = self.pre(content)
+        self.content = content
 
     def wikilink(self, html):
         """Processes Wikilink syntax "[[Link]]" within content body.  This is
@@ -129,17 +110,6 @@ class Processors(object):
         return html
 
     def clean_url(self, url):
-        """Cleans the url and corrects various errors.  Removes multiple spaces
-        and all leading and trailing spaces.  Changes spaces to underscores and
-        makes all characters lowercase.  Also takes care of Windows style
-        folders use.
-
-        Args:
-            url (str): URL link
-
-        Kwargs:
-            None
-        """
         pageStub = re.sub('[ ]{2,}', ' ', url).strip()
         pageStub = pageStub.lower().replace(' ', '_')
         pageStub = pageStub.replace('\\\\', '/').replace('\\', '/')
@@ -147,36 +117,13 @@ class Processors(object):
         pageStub = ''.join(c for c in pageStub if c in valid_characters)
         return pageStub
 
-    def pre(self, content):
-        """Content preprocessor.  This currently does nothing.
-
-        Args:
-            content (str): Preprocessed content directly from the file or
-            textarea.
-
-        Kwargs:
-            None
-        """
-        return content
-
-    def post(self, html):
-        """Content post-processor.
-
-        Args:
-            html (str): Post-processed HTML output from Markdown
-
-        Kwargs:
-            None
-        """
-        return self.wikilink(html)
-
     def out(self):
         """Final content output.  Processes the Markdown, post-processes, and
         Meta data.
         """
         md = markdown.Markdown(['codehilite', 'fenced_code', 'meta', 'tables'])
         html = md.convert(self.content)
-        phtml = self.post(html)
+        phtml = self.wikilink(html)
         body = self.content.split('\n\n', 1)[1]
         meta = md.Meta
         return phtml, body, meta
@@ -414,6 +361,8 @@ def create():
 def edit(url):
     page = wiki.get(url)
     form = EditorForm(obj=page)
+    if not form.title.data:
+        form.title.data = url
     if form.validate_on_submit():
         if not page:
             page = wiki.get_bare(url)
@@ -482,6 +431,7 @@ def search():
 
 @app.errorhandler(404)
 def page_not_found(e):
+    print(e)
     return render_template('404.html'), 404
 
 
