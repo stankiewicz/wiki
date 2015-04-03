@@ -1,4 +1,4 @@
-import hashlib
+from urlparse import urlparse
 import json
 import string
 from functools import wraps
@@ -8,15 +8,13 @@ import re
 import markdown
 import bcrypt  # sudo apt-get install libffi-dev
 from flask import (Flask, render_template, flash, redirect, url_for, request, Response,
-                   abort)
+                   abort, session)
 from flask.ext.wtf import Form
 from wtforms import (BooleanField, TextField, TextAreaField)
 from wtforms.validators import (InputRequired, ValidationError)
-from flask.ext.script import Manager
 
 
-CONF_FILE = 'config.json'
-password_cache = []
+CONF_FILE = 'config.json'  # 'content/config.json'
 
 app = Flask(__name__)
 
@@ -37,11 +35,27 @@ def load_config():
             if user != user.lower():  # Make username lowercase if not already
                 save_flag = True
                 config['USERS'][user.lower()] = config['USERS'].pop(user)
+        secret_key_hex = config.get("SECRET_KEY", "")
+        secret_key = ""
+        try:
+            secret_key = secret_key_hex.decode('hex')
+        except Exception as e:
+            print(e)
+        if len(secret_key) != 24:
+            save_flag = True
+            config["SECRET_KEY"] = os.urandom(24).encode('hex')
 
         if save_flag:
             print('Updating config file...')
             with open(CONF_FILE, 'w') as f:
-                f.write(json.dumps(config, indent=True))
+                f.write(json.dumps(config, indent=True, sort_keys=True))
+
+        content_dir = config.get('CONTENT_DIR', 'content')
+
+        if not os.path.isdir(content_dir):
+            print("Creating content directory: " + content_dir)
+            os.mkdir(content_dir)
+
     except Exception as e:
         print(str(e) + '\n\n Error loading ' + CONF_FILE + '! \n\n')
 
@@ -50,32 +64,30 @@ def load_config():
 
 app.config.update(load_config())
 app.debug = app.config.get('DEBUG', False)
-manager = Manager(app)
 
 
 def check_auth(username, password):
     try:
         user = str(username).lower()
         pwd = str(password)
-        shahash = hashlib.sha1(user + pwd).hexdigest()  # If attacker can read RAM, well game over anyway
-        if shahash in password_cache:
+        hashed = str(app.config['USERS'].get(user, ''))
+        if bcrypt.hashpw(pwd, hashed) == hashed:
+            session['username'] = user
             return True
-        else:
-            hashed = str(app.config['USERS'].get(user, ''))
-            if bcrypt.hashpw(pwd, hashed) == hashed:
-                password_cache.append(shahash)
-                return True
     except Exception as e:
-        print e
+        print(e)
         return False
 
 
 def requires_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
-        auth = request.authorization
-        if not auth or not check_auth(auth.username, auth.password):
-            return Response('Please log in.', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
+        if app.config.get('AUTH', True):
+            username = session.get('username', '')
+            if not username:
+                auth = request.authorization
+                if not auth or not check_auth(auth.username, auth.password):
+                    return Response('Please log in.', 401, {'WWW-Authenticate': 'Basic realm="Login Required"'})
         return f(*args, **kwargs)
 
     return decorated
@@ -130,13 +142,43 @@ class Processors(object):
 
 
 class Page(object):
-    def __init__(self, path, url, new=False):
+    cache = []
+
+    @classmethod
+    def __getCache(cls, cacheid):
+        """ Return cached object """
+        for o in Page.cache:
+            if o.cacheid == cacheid:
+                return o
+        return None
+
+    def __new__(cls, path, url, *args, **kwargs):
+        """ Initialize the class and start processing """
+        if app.config.get('CACHE_PAGES', True):
+            ctime = kwargs.get('ctime', None)
+            if path and ctime:
+                existing = cls.__getCache(path + ctime)
+                if existing:
+                    return existing
+        page = super(Page, cls).__new__(cls)
+        return page
+
+    def __init__(self, path, url, *args, **kwargs):
+        if self in self.cache:
+            return
         self.path = path
         self.url = url
         self._meta = {}
-        if not new:
+        self._html = ""
+        self._body = ""
+        self.content = ""
+        if not kwargs.get('new', False):
             self.load()
             self.render()
+        ctime = kwargs.get('ctime', None)
+        if app.config.get('CACHE_PAGES', True) and ctime:
+            self.cacheid = path + ctime
+            self.cache.append(self)
 
     def load(self):
         with open(self.path, 'rU') as f:
@@ -254,11 +296,12 @@ class Wiki(object):
                 if os.path.isdir(fullname):
                     _walk(fullname, path_prefix + (name,))
                 elif name.endswith('.md'):
+                    ctime = str(os.path.getctime(fullname) or 0)
                     if not path_prefix:
                         url = name[:-3]
                     else:
                         url = os.path.join(os.path.join(*path_prefix), name[:-3])
-                    pages.append(Page(fullname, url.replace('\\', '/')))
+                    pages.append(Page(fullname, url.replace('\\', '/'), ctime=ctime))
 
         pages = []
         _walk(self.root)
@@ -429,6 +472,14 @@ def search():
     return render_template('search.html', form=form, search=None)
 
 
+@app.route('/logout/')
+def logout():
+    o = urlparse(request.url)
+    url = o.scheme + '://foo:bar@' + o.netloc + url_for('home')
+    session.pop('username', None)
+    return redirect(url)
+
+
 @app.errorhandler(404)
 def page_not_found(e):
     print(e)
@@ -436,4 +487,4 @@ def page_not_found(e):
 
 
 if __name__ == '__main__':
-    manager.run()
+    app.run()

@@ -1,13 +1,14 @@
 {
- "CONTENT_DIR": "content",
- "DEBUG": true,
- "DEFAULT_SEARCH_IGNORE_CASE": true,
- "SECRET_KEY": "XVWERASDFASDFASsadf lksadfowa@24j36a",
+ "AUTH": true, 
+ "CACHE_PAGES": true, 
+ "CONTENT_DIR": "content", 
+ "DEBUG": false, 
+ "DEFAULT_SEARCH_IGNORE_CASE": true, 
+ "SECRET_KEY": "96e94929c31386aa314657501f0626ab1d03748e3268ee58", 
+ "TITLE": "Wiki", 
  "USERS": {
-  "admin": "$2a$12$zzDbFJKbv3fmsMsh7dKuWehsK/bEHvoo/t32WXUhVSAbfifIs6YOW", 
-  "sam": "$2a$12$761rykFi1evGChc2A35omuFpNfQw01VoKXaNHLpEWSkLm7LLwHJBG", 
-  "jeff": "$2a$12$itncIKNBRcC/UpDrVs5FIOo8ljzfiploL8splg9bZrH/FEGTgwwhC"
- }, 
- "TITLE": "Wiki"
-
+  "admin": "$2a$12$0hdMi4aPNexrfEl.ftVKg.LbNTnetA2QENqN0x1ibGAOwZfp4JSZ.", 
+  "jeff": "$2a$12$lJQYY.zBRhJd2uKIwc50EeW2tF7az2sc06Aadf2BtvshbW7zN1cYq", 
+  "sam": "$2a$12$HWw6VYeZpB8ktmmycFhrVeI7FyZSw.ewcrBjRIgb3HpJbFMhxzOcW"
+ }
 }
